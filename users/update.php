@@ -1,41 +1,174 @@
 <?php
-session_start();
+
 header("Content-Type: application/json");
 
 require_once "../database.php";
+require_once "../auth.php";
 
-// ADMIN ONLY
-if ($_SESSION['role'] !== 'admin') {
+/*
+|--------------------------------------------------------------------------
+| Admin Only
+|--------------------------------------------------------------------------
+*/
+
+if ($user['role'] !== "admin") {
+
     http_response_code(403);
-    echo json_encode(["error" => "Forbidden"]);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Access denied."
+    ]);
+
     exit;
 }
+
+/*
+|--------------------------------------------------------------------------
+| Read JSON
+|--------------------------------------------------------------------------
+*/
 
 $data = json_decode(file_get_contents("php://input"), true);
 
-$id = $data['id'] ?? null;
-$name = $data['name'] ?? null;
-$email = $data['email'] ?? null;
+$id = intval($data['id'] ?? 0);
+$name = trim($data['name'] ?? '');
+$email = trim($data['email'] ?? '');
+$role = trim($data['role'] ?? '');
 $group_id = $data['group_id'] ?? null;
-$role = $data['role'] ?? null;
 
-if (!$id) {
+/*
+|--------------------------------------------------------------------------
+| Validation
+|--------------------------------------------------------------------------
+*/
+
+if ($id <= 0 || $name === '' || $email === '' || $role === '') {
+
     http_response_code(400);
-    echo json_encode(["error" => "User ID required"]);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "ID, name, email and role are required."
+    ]);
+
     exit;
 }
 
+if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+
+    http_response_code(400);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Invalid email address."
+    ]);
+
+    exit;
+}
+
+if (!in_array($role, ['admin', 'user'])) {
+
+    http_response_code(400);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Invalid role."
+    ]);
+
+    exit;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Check User Exists
+|--------------------------------------------------------------------------
+*/
+
+$stmt = $conn->prepare("SELECT id FROM users WHERE id = ?");
+$stmt->bind_param("i", $id);
+$stmt->execute();
+
+if ($stmt->get_result()->num_rows === 0) {
+
+    http_response_code(404);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "User not found."
+    ]);
+
+    exit;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Duplicate Email Check
+|--------------------------------------------------------------------------
+*/
+
+$stmt = $conn->prepare("
+    SELECT id
+    FROM users
+    WHERE email = ?
+    AND id != ?
+");
+
+$stmt->bind_param("si", $email, $id);
+$stmt->execute();
+
+if ($stmt->get_result()->num_rows > 0) {
+
+    http_response_code(409);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Email already exists."
+    ]);
+
+    exit;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Update User
+|--------------------------------------------------------------------------
+*/
+
 $stmt = $conn->prepare("
     UPDATE users
-    SET name = ?, email = ?, group_id = ?, role = ?
+    SET
+        name = ?,
+        email = ?,
+        role = ?,
+        group_id = ?
     WHERE id = ?
 ");
 
-$stmt->bind_param("ssisi", $name, $email, $group_id, $role, $id);
+$stmt->bind_param(
+    "sssii",
+    $name,
+    $email,
+    $role,
+    $group_id,
+    $id
+);
 
-if ($stmt->execute()) {
-    echo json_encode(["message" => "User updated"]);
-} else {
+if (!$stmt->execute()) {
+
     http_response_code(500);
-    echo json_encode(["error" => "Update failed"]);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to update user."
+    ]);
+
+    exit;
 }
+
+http_response_code(200);
+
+echo json_encode([
+    "success" => true,
+    "message" => "User updated successfully."
+]);

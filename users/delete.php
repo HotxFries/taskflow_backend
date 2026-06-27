@@ -75,11 +75,18 @@ if ($id == $user['id']) {
 |--------------------------------------------------------------------------
 */
 
-$stmt = $conn->prepare("SELECT id FROM users WHERE id = ?");
+$stmt = $conn->prepare("
+    SELECT id, name
+    FROM users
+    WHERE id = ?
+");
+
 $stmt->bind_param("i", $id);
 $stmt->execute();
 
-if ($stmt->get_result()->num_rows === 0) {
+$result = $stmt->get_result();
+
+if ($result->num_rows === 0) {
 
     http_response_code(404);
 
@@ -91,13 +98,19 @@ if ($stmt->get_result()->num_rows === 0) {
     exit;
 }
 
+$deletedUser = $result->fetch_assoc();
+
 /*
 |--------------------------------------------------------------------------
 | Delete User
 |--------------------------------------------------------------------------
 */
 
-$stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
+$stmt = $conn->prepare("
+    DELETE FROM users
+    WHERE id = ?
+");
+
 $stmt->bind_param("i", $id);
 
 if (!$stmt->execute()) {
@@ -111,6 +124,36 @@ if (!$stmt->execute()) {
 
     exit;
 }
+
+/*
+|--------------------------------------------------------------------------
+| Log Activity
+|--------------------------------------------------------------------------
+*/
+
+$action = "Deleted User";
+$details = "Deleted user '{$deletedUser['name']}' (ID: {$id})";
+
+$log = $conn->prepare("
+    INSERT INTO logs
+    (user_id, action, details)
+    VALUES (?, ?, ?)
+");
+
+$log->bind_param(
+    "iss",
+    $user['id'],
+    $action,
+    $details
+);
+
+$log->execute();
+
+/*
+|--------------------------------------------------------------------------
+| Success
+|--------------------------------------------------------------------------
+*/
 
 http_response_code(200);
 

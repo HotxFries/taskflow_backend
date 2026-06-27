@@ -32,10 +32,6 @@ if ($user['role'] !== "admin") {
 $data = json_decode(file_get_contents("php://input"), true);
 
 $id = intval($data['id'] ?? 0);
-$name = trim($data['name'] ?? '');
-$email = trim($data['email'] ?? '');
-$role = trim($data['role'] ?? '');
-$group_id = $data['group_id'] ?? null;
 
 /*
 |--------------------------------------------------------------------------
@@ -43,37 +39,13 @@ $group_id = $data['group_id'] ?? null;
 |--------------------------------------------------------------------------
 */
 
-if ($id <= 0 || $name === '' || $email === '' || $role === '') {
+if ($id <= 0) {
 
     http_response_code(400);
 
     echo json_encode([
         "success" => false,
-        "message" => "ID, name, email and role are required."
-    ]);
-
-    exit;
-}
-
-if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-
-    http_response_code(400);
-
-    echo json_encode([
-        "success" => false,
-        "message" => "Invalid email address."
-    ]);
-
-    exit;
-}
-
-if (!in_array($role, ['admin', 'user'])) {
-
-    http_response_code(400);
-
-    echo json_encode([
-        "success" => false,
-        "message" => "Invalid role."
+        "message" => "Valid task ID is required."
     ]);
 
     exit;
@@ -81,78 +53,47 @@ if (!in_array($role, ['admin', 'user'])) {
 
 /*
 |--------------------------------------------------------------------------
-| Check User Exists
+| Check Task Exists
 |--------------------------------------------------------------------------
 */
 
-$stmt = $conn->prepare("SELECT id FROM users WHERE id = ?");
+$stmt = $conn->prepare("
+    SELECT id, title
+    FROM tasks
+    WHERE id = ?
+");
+
 $stmt->bind_param("i", $id);
 $stmt->execute();
 
-if ($stmt->get_result()->num_rows === 0) {
+$result = $stmt->get_result();
+
+if ($result->num_rows === 0) {
 
     http_response_code(404);
 
     echo json_encode([
         "success" => false,
-        "message" => "User not found."
+        "message" => "Task not found."
     ]);
 
     exit;
 }
 
+$task = $result->fetch_assoc();
+
 /*
 |--------------------------------------------------------------------------
-| Duplicate Email Check
+| Delete Task
 |--------------------------------------------------------------------------
 */
 
 $stmt = $conn->prepare("
-    SELECT id
-    FROM users
-    WHERE email = ?
-    AND id != ?
-");
-
-$stmt->bind_param("si", $email, $id);
-$stmt->execute();
-
-if ($stmt->get_result()->num_rows > 0) {
-
-    http_response_code(409);
-
-    echo json_encode([
-        "success" => false,
-        "message" => "Email already exists."
-    ]);
-
-    exit;
-}
-
-/*
-|--------------------------------------------------------------------------
-| Update User
-|--------------------------------------------------------------------------
-*/
-
-$stmt = $conn->prepare("
-    UPDATE users
-    SET
-        name = ?,
-        email = ?,
-        role = ?,
-        group_id = ?
+    DELETE FROM tasks
     WHERE id = ?
 ");
 
-$stmt->bind_param(
-    "sssii",
-    $name,
-    $email,
-    $role,
-    $group_id,
-    $id
-);
+$stmt->bind_param("i", $id);
 
 if (!$stmt->execute()) {
 
@@ -160,7 +101,7 @@ if (!$stmt->execute()) {
 
     echo json_encode([
         "success" => false,
-        "message" => "Failed to update user."
+        "message" => "Failed to delete task."
     ]);
 
     exit;
@@ -172,8 +113,8 @@ if (!$stmt->execute()) {
 |--------------------------------------------------------------------------
 */
 
-$action = "Updated User";
-$details = "Updated user '{$name}' (ID: {$id})";
+$action = "Deleted Task";
+$details = "Deleted task '{$task['title']}' (ID: {$id})";
 
 $log = $conn->prepare("
     INSERT INTO logs
@@ -200,5 +141,7 @@ http_response_code(200);
 
 echo json_encode([
     "success" => true,
-    "message" => "User updated successfully."
+    "message" => "Task deleted successfully."
 ]);
+
+?>

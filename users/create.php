@@ -12,29 +12,27 @@ require_once "../auth.php";
 */
 
 if ($user['role'] !== "admin") {
-
     http_response_code(403);
 
     echo json_encode([
         "success" => false,
-        "message" => "Access denied."
+        "message" => "Access denied. Only admin can create users."
     ]);
-
     exit;
 }
 
 /*
 |--------------------------------------------------------------------------
-| Read JSON
+| Read JSON Input
 |--------------------------------------------------------------------------
 */
 
 $data = json_decode(file_get_contents("php://input"), true);
 
 $name = trim($data['name'] ?? '');
-$email = trim($data['email'] ?? '');
+$email = strtolower(trim($data['email'] ?? ''));
 $password = trim($data['password'] ?? '');
-$role = trim($data['role'] ?? 'user');
+$role = strtolower(trim($data['role'] ?? 'user'));
 $group_id = $data['group_id'] ?? null;
 
 /*
@@ -44,44 +42,79 @@ $group_id = $data['group_id'] ?? null;
 */
 
 if ($name === '' || $email === '' || $password === '') {
-
     http_response_code(400);
 
     echo json_encode([
         "success" => false,
         "message" => "Name, email and password are required."
     ]);
-
     exit;
 }
 
 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-
     http_response_code(400);
 
     echo json_encode([
         "success" => false,
-        "message" => "Invalid email address."
+        "message" => "Invalid email format."
     ]);
-
     exit;
 }
 
-if (!in_array($role, ['admin', 'user'])) {
-
+if (!in_array($role, ['user', 'admin'])) {
     http_response_code(400);
 
     echo json_encode([
         "success" => false,
         "message" => "Invalid role."
     ]);
-
     exit;
 }
 
 /*
 |--------------------------------------------------------------------------
-| Duplicate Email Check
+| ROLE RULES (IMPORTANT FIX)
+|--------------------------------------------------------------------------
+*/
+
+// Only admin can create admin (you already ensured admin access, but this is safety)
+if ($role === 'admin' && $user['role'] !== 'admin') {
+    http_response_code(403);
+
+    echo json_encode([
+        "success" => false,
+        "message" => "Only admin can create another admin."
+    ]);
+    exit;
+}
+
+/*
+|--------------------------------------------------------------------------
+| GROUP RULES (IMPORTANT FIX)
+|--------------------------------------------------------------------------
+*/
+
+if ($role === 'admin') {
+    $group_id = null;
+}
+
+if ($role === 'user') {
+    if (empty($group_id)) {
+        http_response_code(400);
+
+        echo json_encode([
+            "success" => false,
+            "message" => "group_id is required for users."
+        ]);
+        exit;
+    }
+
+    $group_id = (int)$group_id;
+}
+
+/*
+|--------------------------------------------------------------------------
+| CHECK DUPLICATE EMAIL
 |--------------------------------------------------------------------------
 */
 
@@ -89,21 +122,21 @@ $stmt = $conn->prepare("SELECT id FROM users WHERE email = ?");
 $stmt->bind_param("s", $email);
 $stmt->execute();
 
-if ($stmt->get_result()->num_rows > 0) {
+$result = $stmt->get_result();
 
+if ($result->num_rows > 0) {
     http_response_code(409);
 
     echo json_encode([
         "success" => false,
         "message" => "Email already exists."
     ]);
-
     exit;
 }
 
 /*
 |--------------------------------------------------------------------------
-| Hash Password
+| HASH PASSWORD
 |--------------------------------------------------------------------------
 */
 
@@ -111,13 +144,12 @@ $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
 
 /*
 |--------------------------------------------------------------------------
-| Insert User
+| INSERT USER
 |--------------------------------------------------------------------------
 */
 
 $stmt = $conn->prepare("
-    INSERT INTO users
-    (name, email, password, role, group_id)
+    INSERT INTO users (name, email, password, role, group_id)
     VALUES (?, ?, ?, ?, ?)
 ");
 
@@ -131,21 +163,51 @@ $stmt->bind_param(
 );
 
 if (!$stmt->execute()) {
-
     http_response_code(500);
 
     echo json_encode([
         "success" => false,
         "message" => "Failed to create user."
     ]);
-
     exit;
 }
+
+$userId = $conn->insert_id;
+
+/*
+|--------------------------------------------------------------------------
+| LOG ACTIVITY
+|--------------------------------------------------------------------------
+*/
+
+$action = "Created User";
+$details = "Created {$role} '{$name}' (ID: {$userId})";
+
+$log = $conn->prepare("
+    INSERT INTO logs (user_id, action, details)
+    VALUES (?, ?, ?)
+");
+
+$log->bind_param(
+    "iss",
+    $user['id'],
+    $action,
+    $details
+);
+
+$log->execute();
+
+/*
+|--------------------------------------------------------------------------
+| SUCCESS RESPONSE
+|--------------------------------------------------------------------------
+*/
 
 http_response_code(201);
 
 echo json_encode([
     "success" => true,
     "message" => "User created successfully.",
-    "user_id" => $conn->insert_id
+    "user_id" => $userId,
+    "role" => $role
 ]);
